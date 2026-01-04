@@ -8,10 +8,16 @@ from datetime import datetime
 # --- CONFIGURAÇÃO INICIAL ---
 st.set_page_config(page_title="Cardápio Fácil", layout="wide")
 
-# Cria a pasta de histórico se ela não existir
 PASTA_HISTORICO = "history"
 if not os.path.exists(PASTA_HISTORICO):
     os.makedirs(PASTA_HISTORICO)
+
+# --- INICIALIZAÇÃO DO ESTADO (SESSION STATE) ---
+# Isso serve para a imagem "sobreviver" na memória entre um clique e outro
+if 'imagem_preview' not in st.session_state:
+    st.session_state['imagem_preview'] = None
+if 'sucesso_salvar' not in st.session_state:
+    st.session_state['sucesso_salvar'] = False
 
 st.title("🍞 Cardápio Fácil")
 
@@ -32,16 +38,20 @@ COLUNA_PRODUTO_X = 40
 COLUNA_PRECO_X = 670
 
 # --- FUNÇÃO DE GERENCIAMENTO DE HISTÓRICO ---
-def salvar_no_historico(imagem_pil):
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    caminho_arquivo = os.path.join(PASTA_HISTORICO, f"cardapio_{timestamp}.jpg")
-    imagem_pil.save(caminho_arquivo, quality=95)
-    
-    # Limpeza (Mantém apenas os 30 mais recentes)
-    arquivos = sorted(glob.glob(os.path.join(PASTA_HISTORICO, "*.jpg")), key=os.path.getmtime)
-    while len(arquivos) > 30:
-        os.remove(arquivos[0])
-        arquivos.pop(0)
+def salvar_no_historico():
+    if st.session_state['imagem_preview']:
+        imagem_pil = st.session_state['imagem_preview']
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        caminho_arquivo = os.path.join(PASTA_HISTORICO, f"cardapio_{timestamp}.jpg")
+        imagem_pil.save(caminho_arquivo, quality=95)
+        
+        # Limpeza
+        arquivos = sorted(glob.glob(os.path.join(PASTA_HISTORICO, "*.jpg")), key=os.path.getmtime)
+        while len(arquivos) > 30:
+            os.remove(arquivos[0])
+            arquivos.pop(0)
+            
+        st.session_state['sucesso_salvar'] = True
 
 # --- LAYOUT EM COLUNAS ---
 col_form, col_hist = st.columns([2, 1])
@@ -67,10 +77,12 @@ with col_form:
                     if prod:
                         dados_preenchidos[secao].append({"produto": prod, "preco": preco, "y": y})
 
-        submitted = st.form_submit_button("🎨 Gerar Cardápio")
+        # Alterei o nome do botão para ficar claro
+        submitted = st.form_submit_button("🔄 Atualizar Preview (Visualizar)")
 
-# --- LÓGICA DE GERAÇÃO ---
+# --- LÓGICA DE GERAÇÃO (Apenas Gera, NÃO Salva) ---
 if submitted:
+    st.session_state['sucesso_salvar'] = False # Reseta msg de sucesso
     try:
         img = Image.open("assets/img/cardapio_fundo.jpg")
         draw = ImageDraw.Draw(img)
@@ -81,7 +93,6 @@ if submitted:
             f_preco = ImageFont.truetype("assets/fonts/Roboto-ExtraLight.ttf", TAMANHO_FONTE)
             f_data = ImageFont.truetype("assets/fonts/Roboto-Bold.ttf", 36)
         except OSError:
-            st.warning("⚠️ Fontes padrão usadas.")
             f_prod = ImageFont.load_default()
             f_preco = ImageFont.load_default()
             f_data = ImageFont.load_default()
@@ -96,37 +107,51 @@ if submitted:
                 draw.text((COLUNA_PRODUTO_X, item['y'] + 4), item['produto'], fill=cor_texto, font=f_prod)
                 if item['preco']:
                     draw.text((COLUNA_PRECO_X, item['y'] + 4), item['preco'], fill=cor_texto, font=f_preco)
-
-        # --- EXIBIÇÃO E DOWNLOAD ---
-        with col_form:
-            st.success("✅ Cardápio Gerado e Salvo no Histórico!")
-            
-            # AQUI: Removi qualquer parâmetro de largura. O padrão é ajustar.
-            st.image(img, caption="Resultado Final")
-            
-            salvar_no_historico(img)
-
-            buf_jpg = io.BytesIO()
-            img.save(buf_jpg, format="JPEG", quality=95)
-            byte_jpg = buf_jpg.getvalue()
-
-            buf_pdf = io.BytesIO()
-            img.save(buf_pdf, format="PDF", resolution=100.0)
-            byte_pdf = buf_pdf.getvalue()
-
-            col_d1, col_d2 = st.columns(2)
-            with col_d1:
-                st.download_button("⬇️ Baixar JPG", data=byte_jpg, file_name="cardapio.jpg", mime="image/jpeg")
-            with col_d2:
-                st.download_button("📄 Baixar PDF", data=byte_pdf, file_name="cardapio.pdf", mime="application/pdf")
+        
+        # Salva no Session State (Memória Temporária)
+        st.session_state['imagem_preview'] = img
 
     except FileNotFoundError:
         st.error("Erro: Verifique a imagem de fundo.")
 
+# --- EXIBIÇÃO E BOTÕES FINAIS (Fora do Form) ---
+with col_form:
+    if st.session_state['imagem_preview']:
+        st.write("---")
+        st.subheader("Resultado Final")
+        st.image(st.session_state['imagem_preview'], caption="Preview")
+        
+        # Aqui estão os botões definitivos
+        c_save, c_down1, c_down2 = st.columns([2, 1, 1])
+        
+        with c_save:
+            # Botão que efetivamente Grava no Histórico
+            if st.button("💾 Confirmar e Salvar no Histórico", type="primary"):
+                salvar_no_historico()
+        
+        # Feedback visual
+        if st.session_state['sucesso_salvar']:
+            st.success("✅ Salvo no Histórico com sucesso!")
+
+        # Preparar Downloads
+        img = st.session_state['imagem_preview']
+        buf_jpg = io.BytesIO()
+        img.save(buf_jpg, format="JPEG", quality=95)
+        byte_jpg = buf_jpg.getvalue()
+
+        buf_pdf = io.BytesIO()
+        img.save(buf_pdf, format="PDF", resolution=100.0)
+        byte_pdf = buf_pdf.getvalue()
+
+        with c_down1:
+            st.download_button("⬇️ JPG", data=byte_jpg, file_name="cardapio.jpg", mime="image/jpeg")
+        with c_down2:
+            st.download_button("📄 PDF", data=byte_pdf, file_name="cardapio.pdf", mime="application/pdf")
+
 # --- BARRA LATERAL DE HISTÓRICO ---
 with col_hist:
     st.markdown("### 🕒 Histórico")
-    st.info("Clique para expandir e ver detalhes")
+    st.info("O histórico só atualiza quando você clica em 'Confirmar e Salvar'.")
     
     arquivos_hist = sorted(glob.glob(os.path.join(PASTA_HISTORICO, "*.jpg")), key=os.path.getmtime, reverse=True)
     
@@ -144,13 +169,10 @@ with col_hist:
 
             with st.expander(nome_bonito):
                 img_hist = Image.open(arquivo)
-                
-                # A imagem vai se ajustar sozinha ao tamanho do expander.
                 st.image(img_hist)
-                
                 with open(arquivo, "rb") as file:
                     st.download_button(
-                        label="📥 Baixar este arquivo",
+                        label="📥 Baixar",
                         data=file,
                         file_name=nome_arquivo_bruto,
                         mime="image/jpeg",
